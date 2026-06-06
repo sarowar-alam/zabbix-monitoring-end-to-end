@@ -1,0 +1,18 @@
+# Zabbix Sender Configuration Template
+# ─────────────────────────────────────────────────────────────────────────────
+# This file is sourced by task-linux.sh and read by task-windows.ps1.
+# It is automatically created by the install-agent scripts.
+#
+# Location on Linux  : /etc/zabbix/sender.conf
+# Location on Windows: C:\ProgramData\Zabbix\sender.conf
+# ─────────────────────────────────────────────────────────────────────────────
+
+# IP address of the Zabbix target (proxy for proxy-connected agents,
+# or server private IP for linux-agent-direct)
+ZABBIX_TARGET_IP=REPLACE_WITH_PROXY_OR_SERVER_PRIVATE_IP
+
+# Port (always 10051 — the Zabbix trapper port)
+ZABBIX_TARGET_PORT=10051
+
+# Hostname: must match EXACTLY the host name registered in the Zabbix UI
+ZABBIX_HOSTNAME=REPLACE_WITH_HOST_HOSTNAME

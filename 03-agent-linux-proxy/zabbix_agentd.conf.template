@@ -1,0 +1,25 @@
+# Zabbix Agent Configuration Template — Linux via Proxy
+# Managed by: /etc/zabbix/zabbix_agentd.conf
+# Full reference: https://www.zabbix.com/documentation/7.0/en/manual/appendix/config/zabbix_agentd
+
+# ── Core Settings ─────────────────────────────────────────────────────────────
+PidFile=/run/zabbix/zabbix_agentd.pid
+LogFile=/var/log/zabbix/zabbix_agentd.log
+LogFileSize=10
+
+# Server: passive checks allowed from proxy IP (allow-list)
+Server=REPLACE_WITH_PROXY_PRIVATE_IP
+
+# ServerActive: agent actively sends metrics to proxy (active mode)
+ServerActive=REPLACE_WITH_PROXY_PRIVATE_IP
+
+# Hostname: must match EXACTLY the host name in Zabbix UI
+Hostname=linux-agent-proxy
+
+# ── Include Custom Parameters ─────────────────────────────────────────────────
+Include=/etc/zabbix/zabbix_agentd.d/*.conf
+
+# ── Timing ────────────────────────────────────────────────────────────────────
+RefreshActiveChecks=120
+BufferSend=5
+BufferSize=100

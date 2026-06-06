@@ -1,0 +1,26 @@
+# Zabbix Proxy Configuration Template
+# Managed by: /etc/zabbix/zabbix_proxy.conf
+# Full reference: https://www.zabbix.com/documentation/7.0/en/manual/appendix/config/zabbix_proxy
+
+# ── Core Settings ─────────────────────────────────────────────────────────────
+ProxyMode=0                              # 0=active (proxy connects to server), 1=passive
+Server=REPLACE_WITH_SERVER_PRIVATE_IP    # Zabbix server private IP
+Hostname=ZabbixProxy01                   # Must match exactly what is set in the Zabbix UI
+
+# ── Local Buffer Database (SQLite3) ──────────────────────────────────────────
+DBName=/var/lib/zabbix/zabbix_proxy.db   # SQLite3 file path
+# DBUser and DBPassword are not needed for SQLite3
+
+# ── Network ───────────────────────────────────────────────────────────────────
+ListenPort=10051                         # Port for receiving data from agents
+ConfigFrequency=60                       # How often (seconds) proxy requests config from server
+DataSenderFrequency=1                    # How often (seconds) proxy sends collected data to server
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+LogFile=/var/log/zabbix/zabbix_proxy.log
+LogFileSize=10
+DebugLevel=3
+
+# ── PID & Socket ─────────────────────────────────────────────────────────────
+PidFile=/run/zabbix/zabbix_proxy.pid
+SocketDir=/run/zabbix

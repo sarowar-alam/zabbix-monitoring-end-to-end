@@ -1,0 +1,11 @@
+# Infra state — contains instance IDs and IPs; do not commit
+infra-state.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp
+*~

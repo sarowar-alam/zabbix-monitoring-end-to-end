@@ -1,0 +1,51 @@
+# Zabbix Nginx Configuration Template
+# Managed by: /etc/zabbix/nginx.conf
+# Replace REPLACE_WITH_PRIVATE_IP with the EC2 private IP (or public EIP).
+
+server {
+        listen          8080;
+        server_name     REPLACE_WITH_PRIVATE_IP;
+
+        root    /usr/share/zabbix;
+        index   index.php;
+
+        location = /favicon.ico {
+                log_not_found off;
+        }
+
+        location / {
+                try_files $uri $uri/ =404;
+        }
+
+        location /assets {
+                access_log off;
+                expires 10d;
+        }
+
+        location ~ /\.ht {
+                deny all;
+        }
+
+        location ~ /(api\/|conf[^\.]|include|locale) {
+                deny all;
+                return 404;
+        }
+
+        location /vendor {
+                deny all;
+                return 404;
+        }
+
+        location ~ [^/]\.php(/|$) {
+                fastcgi_pass    unix:/var/run/php/php8.3-fpm.sock;
+                fastcgi_split_path_info ^(.+\.php)(/.+)$;
+                fastcgi_index   index.php;
+
+                fastcgi_param   DOCUMENT_ROOT   /usr/share/zabbix;
+                fastcgi_param   SCRIPT_FILENAME /usr/share/zabbix$fastcgi_script_name;
+                fastcgi_param   HTTP_PROXY      "";
+
+                include fastcgi_params;
+                fastcgi_param   SERVER_NAME     $host;
+        }
+}

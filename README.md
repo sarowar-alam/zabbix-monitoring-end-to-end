@@ -63,31 +63,31 @@ Your Windows 11 Laptop
 ┌─────────────────────────────────────────────────────────────────┐
 │  VPC: 10.0.0.0/16                                               │
 │                                                                 │
-│  PUBLIC subnet  10.0.1.0/24  (AZ: ap-south-1a)                 │
+│  PUBLIC subnet  10.0.1.0/24  (AZ: ap-south-1a)                  │
 │  ┌──────────────────────────────────────────┐                   │
-│  │  zabbix-server  t3.medium  Ubuntu 24.04  │◄── :8080 (UI)    │
+│  │  zabbix-server  t3.medium  Ubuntu 24.04  │◄── :8080 (UI)     │
 │  │  PostgreSQL 16 + Nginx + Zabbix Frontend │                   │
 │  │  Elastic IP attached                     │                   │
 │  └──────────────────────────────────────────┘                   │
 │    ▲ :10051  active check-in from proxy                         │
 │    ▲ :10051  active send from linux-agent-direct                │
 │                                                                 │
-│  NAT Gateway  (private subnet → internet egress)               │
+│  NAT Gateway  (private subnet → internet egress)                │
 │                                                                 │
-│  PRIVATE subnet  10.0.2.0/24  (AZ: ap-south-1a)               │
+│  PRIVATE subnet  10.0.2.0/24  (AZ: ap-south-1a)                 │
 │  ┌────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │
 │  │ zabbix-proxy   │◄─│linux-agent-proxy │  │linux-agent-dirct│  │
 │  │ t3.small       │  │t3.micro          │  │t3.micro         │  │
 │  │ Ubuntu 24.04   │  │Ubuntu 24.04      │  │Ubuntu 24.04     │  │
 │  │ SQLite3 buffer │  │active → proxy    │  │active → server  │  │
 │  └───────┬────────┘  └──────────────────┘  └─────────────────┘  │
-│          │ :10051 active                                         │
-│  ┌───────▼────────┐                                              │
-│  │windows-agent-01│                                              │
-│  │ t3.medium      │                                              │
-│  │ WinSrv 2022    │                                              │
-│  │ active → proxy │                                              │
-│  └────────────────┘                                              │
+│          │ :10051 active                                        │
+│  ┌───────▼────────┐                                             │
+│  │windows-agent-01│                                             │
+│  │ t3.medium      │                                             │
+│  │ WinSrv 2022    │                                             │
+│  │ active → proxy │                                             │
+│  └────────────────┘                                             │
 │                                                                 │
 │  All 5 instances: IAM SSM role + user-data SSM confirmation     │
 └─────────────────────────────────────────────────────────────────┘
@@ -746,8 +746,14 @@ This project is released under the [MIT License](LICENSE).
 
 Zabbix is a registered trademark of Zabbix LLC. This repository is not affiliated with or
 endorsed by Zabbix LLC. AWS is a trademark of Amazon.com, Inc.
-- Complete manual installation steps for every phase
-- Zabbix UI configuration (hosts, proxies, trapper items, triggers)
-- Verification checklist (15 checks)
-- Dashboard widget guide
-- Troubleshooting reference
+
+---
+
+## Project Lead
+
+**MD Sarowar Alam**
+Lead DevOps Engineer, WPP Production
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---

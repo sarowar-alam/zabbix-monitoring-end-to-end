@@ -71,7 +71,7 @@ Your Laptop (Windows 11)
 │  │ Ubuntu 24.04  │  │Ubuntu 24.04      │  │Ubuntu 24.04       │  │
 │  │ SQLite3       │  │active → proxy    │  │active → server    │  │
 │  └───────┬───────┘  └──────────────────┘  └───────────────────┘  │
-│          │ active :10051                                          │
+│          │ active :10051                                         │
 │  ┌───────▼───────┐                                               │
 │  │windows-agent-01│                                              │
 │  │t3.medium       │                                              │
@@ -822,3 +822,14 @@ aws ssm describe-instance-information `
 # For Windows: Start-Service AmazonSSMAgent
 # Also verify IAM instance profile is attached (ZabbixSSMProfile)
 ```
+
+---
+
+## Project Lead
+
+**MD Sarowar Alam**
+Lead DevOps Engineer, WPP Production
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---

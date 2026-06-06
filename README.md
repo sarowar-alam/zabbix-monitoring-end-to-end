@@ -740,20 +740,14 @@ Prompts: `Type DELETE to confirm teardown` before any destructive action.
 
 ---
 
-## 22. License
-
-This project is released under the [MIT License](LICENSE).
-
-Zabbix is a registered trademark of Zabbix LLC. This repository is not affiliated with or
-endorsed by Zabbix LLC. AWS is a trademark of Amazon.com, Inc.
-
----
-
 ## Project Lead
 
 **MD Sarowar Alam**
+
 Lead DevOps Engineer, WPP Production
+
 📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
-🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+🔗 LinkedIn: [https://www.linkedin.com/in/sarowar/](https://www.linkedin.com/in/sarowar/)
 
 ---

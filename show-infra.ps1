@@ -366,14 +366,20 @@ function New-ZabbixInfra {
         $s.sg_windows_agent      = $sgWin
         Save-State $s
         OK "5 SGs created"
+    }
 
-        # ── 9. SG Ingress Rules (only set when SGs are freshly created) ───────
+    # ── 9. SG Ingress Rules ─────────────────────────────────────────────────────────
+    if ($s.Contains('sg_rules_applied') -and $s.sg_rules_applied) {
+        Info "SG ingress rules already applied (skipping)"
+    } else {
         Step "Configuring Security Group ingress rules"
         Allow-CidrIngress $sgSrv 8080  "0.0.0.0/0"   # Zabbix web UI
         Allow-SgIngress   $sgSrv 10051 $sgPrx          # active proxy → server
         Allow-SgIngress   $sgSrv 10051 $sgLad          # linux-agent-direct → server
         Allow-SgIngress   $sgPrx 10051 $sgLap          # linux-agent-proxy → proxy
         Allow-SgIngress   $sgPrx 10051 $sgWin          # windows-agent → proxy
+        $s.sg_rules_applied = $true
+        Save-State $s
         OK "SG rules applied"
     }
 
@@ -383,15 +389,18 @@ function New-ZabbixInfra {
         $uAmi = $s.ubuntu_ami
         $wAmi = $s.windows_ami
     } else {
-        Step "Fetching latest AMI IDs from SSM Parameter Store"
+        Step "Fetching latest AMI IDs"
         $uAmi = Invoke-AwsText ssm get-parameter `
             --name "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp2/ami-id" `
             --query "Parameter.Value"
         OK "Ubuntu 24.04 AMI: $uAmi"
 
-        $wAmi = Invoke-AwsText ssm get-parameter `
-            --name "/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base" `
-            --query "Parameter.Value"
+        $wAmi = Invoke-AwsText ec2 describe-images `
+            --owners amazon `
+            --filters "Name=name,Values=Windows_Server-2022-English-Full-Base-*" `
+                      "Name=state,Values=available" `
+                      "Name=architecture,Values=x86_64" `
+            --query "sort_by(Images, &CreationDate)[-1].ImageId"
         OK "Windows Server 2022 AMI: $wAmi"
 
         $s.ubuntu_ami  = $uAmi

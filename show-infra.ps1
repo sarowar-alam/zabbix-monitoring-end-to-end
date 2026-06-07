@@ -406,9 +406,15 @@ function New-ZabbixInfra {
         $wAmi = $s.windows_ami
     } else {
         Step "Fetching latest AMI IDs"
-        $uAmi = Invoke-AwsText ssm get-parameter `
-            --name "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp2/ami-id" `
-            --query "Parameter.Value"
+        $uAmi = Invoke-AwsText ec2 describe-images `
+            --owners 099720109477 `
+            --filters "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*" `
+                      "Name=state,Values=available" `
+                      "Name=architecture,Values=x86_64" `
+            --query "sort_by(Images, &CreationDate)[-1].ImageId"
+        if (-not $uAmi -or $uAmi -eq 'None') {
+            throw "Ubuntu 24.04 AMI not found in $AWS_REGION — check region or filter"
+        }
         OK "Ubuntu 24.04 AMI: $uAmi"
 
         $wAmi = Invoke-AwsText ec2 describe-images `

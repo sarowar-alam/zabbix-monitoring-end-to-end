@@ -56,32 +56,35 @@ $INST_PROF    = "ZabbixSSMProfile"
 
 function Invoke-Aws {
     # Returns parsed JSON object. Throws on non-zero exit.
-    $out = aws @args --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager
-    if ($LASTEXITCODE -ne 0) { throw "AWS CLI error [exit $LASTEXITCODE]" }
-    if ($out) { return $out | ConvertFrom-Json }
+    $out = aws @args --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "AWS CLI error: $out" }
+    $stdout = $out | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+    if ($stdout) { return ($stdout -join "`n") | ConvertFrom-Json }
     return $null
 }
 
 function Invoke-AwsText {
     # Returns trimmed text output.
-    $out = aws @args --profile $AWS_PROFILE --region $AWS_REGION --output text --no-cli-pager
-    if ($LASTEXITCODE -ne 0) { throw "AWS CLI error [exit $LASTEXITCODE]" }
-    return ($out | Out-String).Trim()
+    $out = aws @args --profile $AWS_PROFILE --region $AWS_REGION --output text --no-cli-pager 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "AWS CLI error: $out" }
+    $stdout = $out | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+    return ($stdout | Out-String).Trim()
 }
 
 function Invoke-AwsWait {
     # Runs an 'aws ec2 wait' command (no output). Accepts a [string[]] argument.
     param([string[]]$Cmd)
-    aws @Cmd --profile $AWS_PROFILE --region $AWS_REGION --no-cli-pager
-    if ($LASTEXITCODE -ne 0) { throw "AWS wait command failed [exit $LASTEXITCODE]" }
+    $out = aws @Cmd --profile $AWS_PROFILE --region $AWS_REGION --no-cli-pager 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "AWS wait command failed: $out" }
 }
 
 function Invoke-IamAws {
     # IAM is global — no --region needed.
     param([string[]]$Cmd)
-    $out = aws @Cmd --profile $AWS_PROFILE --output json --no-cli-pager
-    if ($LASTEXITCODE -ne 0) { throw "AWS IAM error [exit $LASTEXITCODE]" }
-    if ($out) { return $out | ConvertFrom-Json }
+    $out = aws @Cmd --profile $AWS_PROFILE --output json --no-cli-pager 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "AWS IAM error: $out" }
+    $stdout = $out | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+    if ($stdout) { return ($stdout -join "`n") | ConvertFrom-Json }
     return $null
 }
 
@@ -94,8 +97,10 @@ function Sep  { Write-Host ("─" * 72) -ForegroundColor DarkGray }
 
 # ─── State Helpers ────────────────────────────────────────────────────────────
 function Save-State {
-    param([hashtable]$s)
-    $s | ConvertTo-Json -Depth 6 | Set-Content -Path $STATE_FILE -Encoding UTF8
+    param($s)
+    $noBom = New-Object System.Text.UTF8Encoding $false
+    $json  = $s | ConvertTo-Json -Depth 6
+    [IO.File]::WriteAllText($STATE_FILE, $json, $noBom)
     OK "State saved to infra-state.json"
 }
 
@@ -109,24 +114,29 @@ function Read-State {
 # ─── SG Rule Helpers ──────────────────────────────────────────────────────────
 function Allow-CidrIngress {
     param([string]$GroupId, [int]$Port, [string]$Cidr)
-    $null = Invoke-Aws ec2 authorize-security-group-ingress `
-        --group-id $GroupId --protocol tcp --port $Port.ToString() --cidr $Cidr
+    $out = aws ec2 authorize-security-group-ingress `
+        --group-id $GroupId --protocol tcp --port $Port.ToString() --cidr $Cidr `
+        --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1
+    if ($LASTEXITCODE -ne 0 -and ($out -notmatch 'InvalidPermission.Duplicate')) {
+        throw "Allow-CidrIngress failed: $out"
+    }
 }
 
 function Allow-SgIngress {
     # Authorize ingress from another security group using ip-permissions JSON
     param([string]$GroupId, [int]$Port, [string]$SourceSgId)
-    $json = "[{`"IpProtocol`":`"tcp`",`"FromPort`":$Port,`"ToPort`":$Port,`"UserIdGroupPairs`":[{`"GroupId`":`"$SourceSgId`"}]}]"
+    $json   = "[{`"IpProtocol`":`"tcp`",`"FromPort`":$Port,`"ToPort`":$Port,`"UserIdGroupPairs`":[{`"GroupId`":`"$SourceSgId`"}]}]"
     $tmp    = ([IO.Path]::GetTempFileName() + ".json")
     $tmpUri = $tmp.Replace('\', '/')
-    # Write WITHOUT BOM — AWS CLI rejects files with UTF-8 BOM
     $noBom  = New-Object System.Text.UTF8Encoding $false
     [IO.File]::WriteAllText($tmp, $json, $noBom)
     try {
-        aws ec2 authorize-security-group-ingress `
+        $out = aws ec2 authorize-security-group-ingress `
             --group-id $GroupId --ip-permissions "file://$tmpUri" `
-            --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "SG ingress rule failed for $GroupId port $Port from $SourceSgId" }
+            --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1
+        if ($LASTEXITCODE -ne 0 -and ($out -notmatch 'InvalidPermission.Duplicate')) {
+            throw "Allow-SgIngress failed for $GroupId port $Port from $SourceSgId : $out"
+        }
     } finally {
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     }
@@ -401,6 +411,9 @@ function New-ZabbixInfra {
                       "Name=state,Values=available" `
                       "Name=architecture,Values=x86_64" `
             --query "sort_by(Images, &CreationDate)[-1].ImageId"
+        if (-not $wAmi -or $wAmi -eq 'None') {
+            throw "Windows Server 2022 AMI not found in $AWS_REGION — check region or filter"
+        }
         OK "Windows Server 2022 AMI: $wAmi"
 
         $s.ubuntu_ami  = $uAmi
@@ -438,8 +451,9 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
     $tmpW    = [IO.Path]::GetTempFileName() + ".txt"
     $tmpLUri = $tmpL.Replace('\', '/')
     $tmpWUri = $tmpW.Replace('\', '/')
-    [IO.File]::WriteAllText($tmpL, $linuxUD.TrimStart(), [Text.Encoding]::UTF8)
-    [IO.File]::WriteAllText($tmpW, $winUD.TrimStart(),   [Text.Encoding]::UTF8)
+    $noBom   = New-Object System.Text.UTF8Encoding $false
+    [IO.File]::WriteAllText($tmpL, $linuxUD.TrimStart(), $noBom)
+    [IO.File]::WriteAllText($tmpW, $winUD.TrimStart(),   $noBom)
 
     try {
         $launches = @(
@@ -520,8 +534,9 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
     Write-Host ("  " + ("─" * 66))
     foreach ($n in $s.instances.Keys) {
         $i   = $s.instances[$n]
-        $pub = if ($i.public_ip) { $i.public_ip } else { "(private only — SSM access)" }
-        Write-Host ("  " + $n.PadRight(24) + $i.private_ip.PadRight(18) + $pub)
+        $pip = if ($i.Contains('private_ip') -and $i.private_ip) { $i.private_ip } else { "" }
+        $pub = if ($i.Contains('public_ip')  -and $i.public_ip)  { $i.public_ip  } else { "(private only — SSM access)" }
+        Write-Host ("  " + $n.PadRight(24) + $pip.PadRight(18) + $pub)
     }
     Write-Host ""
     Write-Host "  Zabbix Web UI : http://$($s.server_eip_public_ip):8080" -ForegroundColor Cyan
@@ -625,7 +640,7 @@ function Remove-ZabbixInfra {
                 $ns = Invoke-AwsText ec2 describe-nat-gateways `
                     --nat-gateway-ids $state.nat_gw_id --query "NatGateways[0].State"
                 Info "  state: $ns"
-            } while ($ns -notin @("deleted",""))
+            } while ($ns -notin @('deleted','failed',''))
             OK "NAT Gateway deleted"
         } catch { Warn "NAT GW deletion issue: $($_.Exception.Message)" }
     }

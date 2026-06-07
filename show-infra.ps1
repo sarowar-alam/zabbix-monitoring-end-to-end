@@ -29,10 +29,16 @@
 
 [CmdletBinding()]
 param(
+    [Parameter(Position=0)][string]$Action = "",
     [switch]$Create,
     [switch]$Status,
     [switch]$Teardown
 )
+
+# Map GNU-style --flags to switches
+if ($Action -eq "--create")   { $Create   = $true; $Action = "" }
+if ($Action -eq "--status")   { $Status   = $true; $Action = "" }
+if ($Action -eq "--teardown") { $Teardown = $true; $Action = "" }
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"

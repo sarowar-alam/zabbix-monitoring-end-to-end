@@ -65,7 +65,9 @@ function Invoke-Aws {
 }
 
 function Invoke-AwsText {
-    # Returns trimmed text output.    $cmdArgs = $args    $out = & { $ErrorActionPreference = 'Continue'; aws @args --profile $AWS_PROFILE --region $AWS_REGION --output text --no-cli-pager 2>&1 }
+    # Returns trimmed text output.
+    $cmdArgs = $args
+    $out = & { $ErrorActionPreference = 'Continue'; aws @cmdArgs --profile $AWS_PROFILE --region $AWS_REGION --output text --no-cli-pager 2>&1 }
     if ($LASTEXITCODE -ne 0) { throw "AWS CLI error: $($out -join ' ')" }
     $stdout = $out | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
     return ($stdout | Out-String).Trim()

@@ -158,7 +158,7 @@ function New-ZabbixInfra {
     }
 
     # ── 1. VPC ────────────────────────────────────────────────────────────────
-    if ($s.vpc_id) {
+    if ($s.ContainsKey('vpc_id') -and $s.vpc_id) {
         Info "VPC already exists: $($s.vpc_id) (skipping)"
         $vpcId = $s.vpc_id
     } else {
@@ -174,7 +174,7 @@ function New-ZabbixInfra {
     }
 
     # ── 2. Subnets ────────────────────────────────────────────────────────────
-    if ($s.public_subnet_id) {
+    if ($s.ContainsKey('public_subnet_id') -and $s.public_subnet_id) {
         Info "Subnets already exist (skipping)"
         $pubSubId = $s.public_subnet_id
         $pvtSubId = $s.private_subnet_id
@@ -196,7 +196,7 @@ function New-ZabbixInfra {
     }
 
     # ── 3. Internet Gateway ───────────────────────────────────────────────────
-    if ($s.igw_id) {
+    if ($s.ContainsKey('igw_id') -and $s.igw_id) {
         Info "IGW already exists: $($s.igw_id) (skipping)"
         $igwId = $s.igw_id
     } else {
@@ -211,7 +211,7 @@ function New-ZabbixInfra {
     }
 
     # ── 4. Elastic IPs ────────────────────────────────────────────────────────
-    if ($s.nat_eip_alloc_id) {
+    if ($s.ContainsKey('nat_eip_alloc_id') -and $s.nat_eip_alloc_id) {
         Info "EIPs already allocated (skipping)"
     } else {
         Step "Allocating Elastic IPs (NAT Gateway + Zabbix Server)"
@@ -227,7 +227,7 @@ function New-ZabbixInfra {
     }
 
     # ── 5. NAT Gateway ────────────────────────────────────────────────────────
-    if ($s.nat_gw_id) {
+    if ($s.ContainsKey('nat_gw_id') -and $s.nat_gw_id) {
         Info "NAT Gateway already exists: $($s.nat_gw_id) (skipping)"
         $natGwId = $s.nat_gw_id
     } else {
@@ -248,7 +248,7 @@ function New-ZabbixInfra {
     }
 
     # ── 6. Route Tables ───────────────────────────────────────────────────────
-    if ($s.public_rt_id) {
+    if ($s.ContainsKey('public_rt_id') -and $s.public_rt_id) {
         Info "Route tables already exist (skipping)"
         $pubRtId = $s.public_rt_id
         $pvtRtId = $s.private_rt_id
@@ -273,7 +273,7 @@ function New-ZabbixInfra {
     }
 
     # ── 7. IAM Role for SSM ───────────────────────────────────────────────────
-    if ($s.iam_role_arn -and $s.iam_role_arn -ne "") {
+    if ($s.ContainsKey('iam_role_arn') -and $s.iam_role_arn -ne "") {
         Info "IAM role already exists: $ROLE_NAME (skipping)"
     } else {
         Step "Creating IAM role '$ROLE_NAME' (AmazonSSMManagedInstanceCore)"
@@ -319,7 +319,7 @@ function New-ZabbixInfra {
     }
 
     # ── 8. Security Groups ────────────────────────────────────────────────────
-    if ($s.sg_server -and $s.sg_server -ne "") {
+    if ($s.ContainsKey('sg_server') -and $s.sg_server -ne "") {
         Info "Security Groups already exist (skipping)"
         $sgSrv = $s.sg_server
         $sgPrx = $s.sg_proxy
@@ -364,7 +364,7 @@ function New-ZabbixInfra {
     }
 
     # ── 10. Fetch AMI IDs ─────────────────────────────────────────────────────
-    if ($s.ubuntu_ami -and $s.ubuntu_ami -ne "") {
+    if ($s.ContainsKey('ubuntu_ami') -and $s.ubuntu_ami -ne "") {
         Info "AMIs already fetched (skipping)"
         $uAmi = $s.ubuntu_ami
         $wAmi = $s.windows_ami
@@ -430,7 +430,7 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
         $needWait = @()
         Step "Launching EC2 instances"
         foreach ($l in $launches) {
-            if ($s.instances.ContainsKey($l.name) -and $s.instances[$l.name].instance_id) {
+            if ($s.instances.ContainsKey($l.name) -and $s.instances[$l.name].ContainsKey('instance_id') -and $s.instances[$l.name].instance_id) {
                 Info "$($l.name) already launched: $($s.instances[$l.name].instance_id) (skipping)"
                 continue
             }
@@ -462,7 +462,7 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
         # ── 13. Collect Private IPs ───────────────────────────────────────────
         Step "Collecting private IPs"
         foreach ($name in $s.instances.Keys) {
-            if ($s.instances[$name].private_ip) { Info "$name  →  $($s.instances[$name].private_ip) (cached)"; continue }
+            if ($s.instances[$name].ContainsKey('private_ip') -and $s.instances[$name].private_ip) { Info "$name  →  $($s.instances[$name].private_ip) (cached)"; continue }
             $id  = $s.instances[$name].instance_id
             $pip = Invoke-AwsText ec2 describe-instances --instance-ids $id `
                        --query "Reservations[0].Instances[0].PrivateIpAddress"
@@ -472,7 +472,7 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
         Save-State $s
 
         # ── 14. Associate Server EIP ─────────────────────────────────────────
-        if (-not $s.instances["zabbix-server"].public_ip) {
+        if (-not ($s.instances["zabbix-server"].ContainsKey('public_ip') -and $s.instances["zabbix-server"].public_ip)) {
             $null = Invoke-Aws ec2 associate-address `
                 --instance-id $s.instances["zabbix-server"].instance_id `
                 --allocation-id $s.server_eip_alloc_id

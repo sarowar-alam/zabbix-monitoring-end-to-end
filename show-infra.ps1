@@ -114,18 +114,18 @@ function Allow-CidrIngress {
 }
 
 function Allow-SgIngress {
-    # Authorize ingress from another security group using ip-permissions JSON (file-based)
+    # Authorize ingress from another security group using ip-permissions JSON
     param([string]$GroupId, [int]$Port, [string]$SourceSgId)
     $json = "[{`"IpProtocol`":`"tcp`",`"FromPort`":$Port,`"ToPort`":$Port,`"UserIdGroupPairs`":[{`"GroupId`":`"$SourceSgId`"}]}]"
-    $tmp = [IO.Path]::GetTempFileName() + ".json"
-    [IO.File]::WriteAllText($tmp, $json, [Text.Encoding]::UTF8)
+    $tmp = ([IO.Path]::GetTempFileName() + ".json").Replace('\', '/')
+    [IO.File]::WriteAllText($tmp.Replace('/', '\'), $json, [Text.Encoding]::UTF8)
     try {
         aws ec2 authorize-security-group-ingress `
             --group-id $GroupId --ip-permissions "file://$tmp" `
             --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "SG ingress rule failed for $GroupId port $Port from $SourceSgId" }
     } finally {
-        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmp.Replace('/', '\') -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -226,20 +226,16 @@ function New-ZabbixInfra {
     # ── 7. IAM Role for SSM ───────────────────────────────────────────────────
     Step "Creating IAM role '$ROLE_NAME' (AmazonSSMManagedInstanceCore)"
     $trust = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
-    $tmpTrust = [IO.Path]::GetTempFileName() + ".json"
-    [IO.File]::WriteAllText($tmpTrust, $trust, [Text.Encoding]::UTF8)
     try {
-        try {
-            $role = Invoke-IamAws @("iam","create-role","--role-name",$ROLE_NAME,
-                "--assume-role-policy-document","file://$tmpTrust")
-            $s.iam_role_arn = $role.Role.Arn
-        } catch {
-            if ($_ -match "EntityAlreadyExists") {
-                Warn "IAM role already exists — reusing"
-                $s.iam_role_arn = (Invoke-IamAws @("iam","get-role","--role-name",$ROLE_NAME)).Role.Arn
-            } else { throw }
-        }
-    } finally { Remove-Item $tmpTrust -Force -ErrorAction SilentlyContinue }
+        $role = Invoke-IamAws @("iam","create-role","--role-name",$ROLE_NAME,
+            "--assume-role-policy-document",$trust)
+        $s.iam_role_arn = $role.Role.Arn
+    } catch {
+        if ($_ -match "EntityAlreadyExists") {
+            Warn "IAM role already exists — reusing"
+            $s.iam_role_arn = (Invoke-IamAws @("iam","get-role","--role-name",$ROLE_NAME)).Role.Arn
+        } else { throw }
+    }
 
     $null = Invoke-IamAws @("iam","attach-role-policy","--role-name",$ROLE_NAME,
         "--policy-arn","arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")
@@ -346,6 +342,8 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
     $tmpW = [IO.Path]::GetTempFileName() + ".txt"
     [IO.File]::WriteAllText($tmpL, $linuxUD.TrimStart(), [Text.Encoding]::UTF8)
     [IO.File]::WriteAllText($tmpW, $winUD.TrimStart(),   [Text.Encoding]::UTF8)
+    $tmpLUri = $tmpL.Replace('\', '/')
+    $tmpWUri = $tmpW.Replace('\', '/')
 
     try {
         # ── 12. Launch EC2 Instances ──────────────────────────────────────────
@@ -353,11 +351,11 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
         $s.instances = [ordered]@{}
 
         $launches = @(
-            [ordered]@{ name="zabbix-server";      type="t3.medium"; subnet=$pubSubId; sg=$sgSrv; ami=$uAmi; ud=$tmpL; vol=20 }
-            [ordered]@{ name="zabbix-proxy";       type="t3.small";  subnet=$pvtSubId; sg=$sgPrx; ami=$uAmi; ud=$tmpL; vol=15 }
-            [ordered]@{ name="linux-agent-proxy";  type="t3.micro";  subnet=$pvtSubId; sg=$sgLap; ami=$uAmi; ud=$tmpL; vol=10 }
-            [ordered]@{ name="linux-agent-direct"; type="t3.micro";  subnet=$pvtSubId; sg=$sgLad; ami=$uAmi; ud=$tmpL; vol=10 }
-            [ordered]@{ name="windows-agent-01";   type="t3.medium"; subnet=$pvtSubId; sg=$sgWin; ami=$wAmi; ud=$tmpW; vol=50 }
+            [ordered]@{ name="zabbix-server";      type="t3.medium"; subnet=$pubSubId; sg=$sgSrv; ami=$uAmi; ud=$tmpLUri; vol=20 }
+            [ordered]@{ name="zabbix-proxy";       type="t3.small";  subnet=$pvtSubId; sg=$sgPrx; ami=$uAmi; ud=$tmpLUri; vol=15 }
+            [ordered]@{ name="linux-agent-proxy";  type="t3.micro";  subnet=$pvtSubId; sg=$sgLap; ami=$uAmi; ud=$tmpLUri; vol=10 }
+            [ordered]@{ name="linux-agent-direct"; type="t3.micro";  subnet=$pvtSubId; sg=$sgLad; ami=$uAmi; ud=$tmpLUri; vol=10 }
+            [ordered]@{ name="windows-agent-01";   type="t3.medium"; subnet=$pvtSubId; sg=$sgWin; ami=$wAmi; ud=$tmpWUri; vol=50 }
         )
 
         foreach ($l in $launches) {
@@ -496,9 +494,10 @@ function Remove-ZabbixInfra {
                 if (-not $permJson.StartsWith("[")) { $permJson = "[$permJson]" }
                 $tmpRevoke = [IO.Path]::GetTempFileName() + ".json"
                 [IO.File]::WriteAllText($tmpRevoke, $permJson, [Text.Encoding]::UTF8)
+                $tmpRevokeUri = $tmpRevoke.Replace('\', '/')
                 try {
                     aws ec2 revoke-security-group-ingress --group-id $sgId `
-                        --ip-permissions "file://$tmpRevoke" `
+                        --ip-permissions "file://$tmpRevokeUri" `
                         --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager | Out-Null
                 } finally { Remove-Item $tmpRevoke -Force -ErrorAction SilentlyContinue }
             }

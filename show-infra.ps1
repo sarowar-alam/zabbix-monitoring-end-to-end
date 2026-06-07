@@ -56,8 +56,8 @@ $INST_PROF    = "ZabbixSSMProfile"
 
 function Invoke-Aws {
     # Returns parsed JSON object. Throws on non-zero exit.
-    $out = aws @args --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "AWS CLI error: $out" }
+    $out = & { $ErrorActionPreference = 'Continue'; aws @args --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1 }
+    if ($LASTEXITCODE -ne 0) { throw "AWS CLI error: $($out -join ' ')" }
     $stdout = $out | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
     if ($stdout) { return ($stdout -join "`n") | ConvertFrom-Json }
     return $null
@@ -65,8 +65,8 @@ function Invoke-Aws {
 
 function Invoke-AwsText {
     # Returns trimmed text output.
-    $out = aws @args --profile $AWS_PROFILE --region $AWS_REGION --output text --no-cli-pager 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "AWS CLI error: $out" }
+    $out = & { $ErrorActionPreference = 'Continue'; aws @args --profile $AWS_PROFILE --region $AWS_REGION --output text --no-cli-pager 2>&1 }
+    if ($LASTEXITCODE -ne 0) { throw "AWS CLI error: $($out -join ' ')" }
     $stdout = $out | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
     return ($stdout | Out-String).Trim()
 }
@@ -74,15 +74,15 @@ function Invoke-AwsText {
 function Invoke-AwsWait {
     # Runs an 'aws ec2 wait' command (no output). Accepts a [string[]] argument.
     param([string[]]$Cmd)
-    $out = aws @Cmd --profile $AWS_PROFILE --region $AWS_REGION --no-cli-pager 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "AWS wait command failed: $out" }
+    $out = & { $ErrorActionPreference = 'Continue'; aws @Cmd --profile $AWS_PROFILE --region $AWS_REGION --no-cli-pager 2>&1 }
+    if ($LASTEXITCODE -ne 0) { throw "AWS wait command failed: $($out -join ' ')" }
 }
 
 function Invoke-IamAws {
     # IAM is global — no --region needed.
     param([string[]]$Cmd)
-    $out = aws @Cmd --profile $AWS_PROFILE --output json --no-cli-pager 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "AWS IAM error: $out" }
+    $out = & { $ErrorActionPreference = 'Continue'; aws @Cmd --profile $AWS_PROFILE --output json --no-cli-pager 2>&1 }
+    if ($LASTEXITCODE -ne 0) { throw "AWS IAM error: $($out -join ' ')" }
     $stdout = $out | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
     if ($stdout) { return ($stdout -join "`n") | ConvertFrom-Json }
     return $null
@@ -114,11 +114,13 @@ function Read-State {
 # ─── SG Rule Helpers ──────────────────────────────────────────────────────────
 function Allow-CidrIngress {
     param([string]$GroupId, [int]$Port, [string]$Cidr)
-    $out = aws ec2 authorize-security-group-ingress `
-        --group-id $GroupId --protocol tcp --port $Port.ToString() --cidr $Cidr `
-        --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1
-    if ($LASTEXITCODE -ne 0 -and ($out -notmatch 'InvalidPermission.Duplicate')) {
-        throw "Allow-CidrIngress failed: $out"
+    $out = & { $ErrorActionPreference = 'Continue'
+        aws ec2 authorize-security-group-ingress `
+            --group-id $GroupId --protocol tcp --port $Port.ToString() --cidr $Cidr `
+            --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1
+    }
+    if ($LASTEXITCODE -ne 0 -and ("$out" -notmatch 'InvalidPermission.Duplicate')) {
+        throw "Allow-CidrIngress failed: $($out -join ' ')"
     }
 }
 
@@ -131,11 +133,13 @@ function Allow-SgIngress {
     $noBom  = New-Object System.Text.UTF8Encoding $false
     [IO.File]::WriteAllText($tmp, $json, $noBom)
     try {
-        $out = aws ec2 authorize-security-group-ingress `
-            --group-id $GroupId --ip-permissions "file://$tmpUri" `
-            --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1
-        if ($LASTEXITCODE -ne 0 -and ($out -notmatch 'InvalidPermission.Duplicate')) {
-            throw "Allow-SgIngress failed for $GroupId port $Port from $SourceSgId : $out"
+        $out = & { $ErrorActionPreference = 'Continue'
+            aws ec2 authorize-security-group-ingress `
+                --group-id $GroupId --ip-permissions "file://$tmpUri" `
+                --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1
+        }
+        if ($LASTEXITCODE -ne 0 -and ("$out" -notmatch 'InvalidPermission.Duplicate')) {
+            throw "Allow-SgIngress failed for $GroupId port $Port from $SourceSgId : $($out -join ' ')"
         }
     } finally {
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue

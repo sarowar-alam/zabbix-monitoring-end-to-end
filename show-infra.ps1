@@ -56,7 +56,8 @@ $INST_PROF    = "ZabbixSSMProfile"
 
 function Invoke-Aws {
     # Returns parsed JSON object. Throws on non-zero exit.
-    $out = & { $ErrorActionPreference = 'Continue'; aws @args --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1 }
+    $cmdArgs = $args
+    $out = & { $ErrorActionPreference = 'Continue'; aws @cmdArgs --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager 2>&1 }
     if ($LASTEXITCODE -ne 0) { throw "AWS CLI error: $($out -join ' ')" }
     $stdout = $out | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
     if ($stdout) { return ($stdout -join "`n") | ConvertFrom-Json }
@@ -64,8 +65,7 @@ function Invoke-Aws {
 }
 
 function Invoke-AwsText {
-    # Returns trimmed text output.
-    $out = & { $ErrorActionPreference = 'Continue'; aws @args --profile $AWS_PROFILE --region $AWS_REGION --output text --no-cli-pager 2>&1 }
+    # Returns trimmed text output.    $cmdArgs = $args    $out = & { $ErrorActionPreference = 'Continue'; aws @args --profile $AWS_PROFILE --region $AWS_REGION --output text --no-cli-pager 2>&1 }
     if ($LASTEXITCODE -ne 0) { throw "AWS CLI error: $($out -join ' ')" }
     $stdout = $out | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
     return ($stdout | Out-String).Trim()

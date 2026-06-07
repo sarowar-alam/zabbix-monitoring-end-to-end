@@ -226,16 +226,21 @@ function New-ZabbixInfra {
     # ── 7. IAM Role for SSM ───────────────────────────────────────────────────
     Step "Creating IAM role '$ROLE_NAME' (AmazonSSMManagedInstanceCore)"
     $trust = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+    $tmpTrust     = [IO.Path]::GetTempFileName() + ".json"
+    $tmpTrustUri  = $tmpTrust.Replace('\', '/')
+    [IO.File]::WriteAllText($tmpTrust, $trust, [Text.Encoding]::ASCII)
     try {
-        $role = Invoke-IamAws @("iam","create-role","--role-name",$ROLE_NAME,
-            "--assume-role-policy-document",$trust)
-        $s.iam_role_arn = $role.Role.Arn
-    } catch {
-        if ($_ -match "EntityAlreadyExists") {
-            Warn "IAM role already exists — reusing"
-            $s.iam_role_arn = (Invoke-IamAws @("iam","get-role","--role-name",$ROLE_NAME)).Role.Arn
-        } else { throw }
-    }
+        try {
+            $role = Invoke-IamAws @("iam","create-role","--role-name",$ROLE_NAME,
+                "--assume-role-policy-document","file://$tmpTrustUri")
+            $s.iam_role_arn = $role.Role.Arn
+        } catch {
+            if ($_ -match "EntityAlreadyExists") {
+                Warn "IAM role already exists — reusing"
+                $s.iam_role_arn = (Invoke-IamAws @("iam","get-role","--role-name",$ROLE_NAME)).Role.Arn
+            } else { throw }
+        }
+    } finally { Remove-Item $tmpTrust -Force -ErrorAction SilentlyContinue }
 
     $null = Invoke-IamAws @("iam","attach-role-policy","--role-name",$ROLE_NAME,
         "--policy-arn","arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")

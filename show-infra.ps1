@@ -315,10 +315,13 @@ function New-ZabbixInfra {
             $s.instance_profile_arn = $prof.InstanceProfile.Arn
         }
 
-        try {
+        # Add role to profile only if not already attached
+        $profDetail = Invoke-IamAws @("iam","get-instance-profile","--instance-profile-name",$INST_PROF)
+        $alreadyAttached = $profDetail.InstanceProfile.Roles | Where-Object { $_.RoleName -eq $ROLE_NAME }
+        if (-not $alreadyAttached) {
             $null = Invoke-IamAws @("iam","add-role-to-instance-profile",
                 "--instance-profile-name",$INST_PROF,"--role-name",$ROLE_NAME)
-        } catch { if (-not ($_ -match "LimitExceeded")) { throw } }
+        }
 
         Save-State $s
         OK "IAM role=$ROLE_NAME  profile=$INST_PROF"

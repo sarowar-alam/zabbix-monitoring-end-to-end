@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Provision, check status of, or tear down the Zabbix monitoring stack on AWS ap-south-1.
@@ -259,15 +259,15 @@ function New-ZabbixInfra {
 
     # ── 8. Security Groups ────────────────────────────────────────────────────
     Step "Creating 5 Security Groups"
-    $sgSrv = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-server"
+    $sgSrv = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-server" `
         --description "Zabbix Server SG" --vpc-id $vpcId).GroupId
-    $sgPrx = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-proxy"
+    $sgPrx = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-proxy" `
         --description "Zabbix Proxy SG" --vpc-id $vpcId).GroupId
-    $sgLap = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-linux-agent-proxy"
+    $sgLap = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-linux-agent-proxy" `
         --description "Linux Agent via Proxy SG" --vpc-id $vpcId).GroupId
-    $sgLad = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-linux-agent-direct"
+    $sgLad = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-linux-agent-direct" `
         --description "Linux Agent Direct SG" --vpc-id $vpcId).GroupId
-    $sgWin = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-windows-agent"
+    $sgWin = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-windows-agent" `
         --description "Windows Agent SG" --vpc-id $vpcId).GroupId
 
     Set-Tag $sgSrv "zbx-sg-server"

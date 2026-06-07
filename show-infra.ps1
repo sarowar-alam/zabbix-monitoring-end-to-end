@@ -117,15 +117,18 @@ function Allow-SgIngress {
     # Authorize ingress from another security group using ip-permissions JSON
     param([string]$GroupId, [int]$Port, [string]$SourceSgId)
     $json = "[{`"IpProtocol`":`"tcp`",`"FromPort`":$Port,`"ToPort`":$Port,`"UserIdGroupPairs`":[{`"GroupId`":`"$SourceSgId`"}]}]"
-    $tmp = ([IO.Path]::GetTempFileName() + ".json").Replace('\', '/')
-    [IO.File]::WriteAllText($tmp.Replace('/', '\'), $json, [Text.Encoding]::UTF8)
+    $tmp    = ([IO.Path]::GetTempFileName() + ".json")
+    $tmpUri = $tmp.Replace('\', '/')
+    # Write WITHOUT BOM — AWS CLI rejects files with UTF-8 BOM
+    $noBom  = New-Object System.Text.UTF8Encoding $false
+    [IO.File]::WriteAllText($tmp, $json, $noBom)
     try {
         aws ec2 authorize-security-group-ingress `
-            --group-id $GroupId --ip-permissions "file://$tmp" `
+            --group-id $GroupId --ip-permissions "file://$tmpUri" `
             --profile $AWS_PROFILE --region $AWS_REGION --output json --no-cli-pager | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "SG ingress rule failed for $GroupId port $Port from $SourceSgId" }
     } finally {
-        Remove-Item $tmp.Replace('/', '\') -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -584,9 +587,10 @@ function Remove-ZabbixInfra {
                 $permJson = $perms | ConvertTo-Json -Depth 8 -Compress
                 # Ensure it's an array
                 if (-not $permJson.StartsWith("[")) { $permJson = "[$permJson]" }
-                $tmpRevoke = [IO.Path]::GetTempFileName() + ".json"
-                [IO.File]::WriteAllText($tmpRevoke, $permJson, [Text.Encoding]::UTF8)
+                $tmpRevoke    = [IO.Path]::GetTempFileName() + ".json"
                 $tmpRevokeUri = $tmpRevoke.Replace('\', '/')
+                $noBom        = New-Object System.Text.UTF8Encoding $false
+                [IO.File]::WriteAllText($tmpRevoke, $permJson, $noBom)
                 try {
                     aws ec2 revoke-security-group-ingress --group-id $sgId `
                         --ip-permissions "file://$tmpRevokeUri" `

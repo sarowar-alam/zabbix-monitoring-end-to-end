@@ -60,33 +60,33 @@ Your Laptop (Windows 11)
 │  │  Ubuntu 24.04                   │     (web UI from internet)  │
 │  │  PostgreSQL 16 + Nginx + UI     │                             │
 │  └─────────────────────────────────┘                             │
-│    ▲ :10051  (proxy active check-in)                             │
-│    ▲ :10051  (linux-agent-direct active send)                    │
+│    ▲ :10051  (proxy check-in to server)                          │
+│    ▼ :10050  (server polls linux-agent-direct)                   │
 │  NAT GW  ←── private subnet internet egress                      │
 │                                                                  │
 │  PRIVATE subnet 10.0.2.0/24                                      │
 │  ┌───────────────┐  ┌──────────────────┐  ┌───────────────────┐  │
-│  │ zabbix-proxy  │◄─│linux-agent-proxy │  │linux-agent-direct │  │
+│  │ zabbix-proxy  │─►│linux-agent-proxy │  │linux-agent-direct │  │
 │  │ t3.small      │  │t3.micro          │  │t3.micro           │  │
 │  │ Ubuntu 24.04  │  │Ubuntu 24.04      │  │Ubuntu 24.04       │  │
-│  │ SQLite3       │  │active → proxy    │  │active → server    │  │
+│  │ SQLite3       │  │passive ← proxy   │  │passive ← server   │  │
 │  └───────┬───────┘  └──────────────────┘  └───────────────────┘  │
-│          │ active :10051                                         │
+│          │ polls :10050                                          │
 │  ┌───────▼───────┐                                               │
 │  │windows-agent-01│                                              │
 │  │t3.medium       │                                              │
 │  │WinSrv 2022     │                                              │
-│  │active → proxy  │                                              │
+│  │passive ← proxy │                                              │
 │  └────────────────┘                                              │
 │  All 5 instances: IAM SSM role + user data SSM confirmation      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 **Key networking rules:**
-- All agents run in **active mode** — they dial OUT. No inbound Zabbix ports on agent SGs.
-- `linux-agent-proxy` and `windows-agent-01` → connect to **proxy** on port 10051
-- `linux-agent-direct` → connects directly to **server** on port 10051 (no proxy)
-- Proxy → server: **private IP** (same VPC, no NAT needed)
+- All agents run in **passive mode** — the server/proxy dials IN to poll them on port 10050.
+- `linux-agent-proxy` and `windows-agent-01` → polled by **proxy** on port 10050
+- `linux-agent-direct` → polled directly by **server** on port 10050 (no proxy)
+- Proxy → server: **port 10051** (proxy active check-in, private IP, no NAT needed)
 - Access method: **SSM Session Manager only** (no SSH keys, no bastion)
 
 ---
@@ -139,11 +139,11 @@ If you prefer manual creation, perform these steps in order:
 
    | SG | Inbound | Outbound |
    |----|---------|----------|
-   | `sg-zbx-server` | TCP 8080 from `0.0.0.0/0`; TCP 10051 from `sg-zbx-proxy`; TCP 10051 from `sg-zbx-linux-agent-direct` | All |
-   | `sg-zbx-proxy` | TCP 10051 from `sg-zbx-linux-agent-proxy`; TCP 10051 from `sg-zbx-windows-agent` | All |
-   | `sg-zbx-linux-agent-proxy` | (none) | All |
-   | `sg-zbx-linux-agent-direct` | (none) | All |
-   | `sg-zbx-windows-agent` | (none) | All |
+   | `sg-zbx-server` | TCP 8080 from `0.0.0.0/0`; TCP 10051 from `sg-zbx-proxy` | All |
+   | `sg-zbx-proxy` | (none) | All |
+   | `sg-zbx-linux-agent-proxy` | TCP 10050 from `sg-zbx-proxy` | All |
+   | `sg-zbx-linux-agent-direct` | TCP 10050 from `sg-zbx-server` | All |
+   | `sg-zbx-windows-agent` | TCP 10050 from `sg-zbx-proxy` | All |
 
 9. **EC2 Instances** (with `ZabbixSSMProfile` instance profile attached):
 
@@ -384,10 +384,10 @@ dpkg -i zabbix-release_latest_7.0+ubuntu24.04_all.deb && apt-get update -y
 
 apt-get install -y zabbix-agent zabbix-sender
 
-# Configure agent
-sed -i -E "s|^[# ]*Server=.*|Server=${PROXY_IP}|"       /etc/zabbix/zabbix_agentd.conf
-sed -i -E "s|^[# ]*ServerActive=.*|ServerActive=${PROXY_IP}|" /etc/zabbix/zabbix_agentd.conf
-sed -i -E "s|^[# ]*Hostname=.*|Hostname=linux-agent-proxy|"   /etc/zabbix/zabbix_agentd.conf
+# Configure agent — passive mode (proxy polls agent on :10050)
+sed -i -E 's|^[# ]*Server=.*|Server=10.0.2.138|'            /etc/zabbix/zabbix_agentd.conf
+sed -i -E 's|^[# ]*ServerActive=.*|# ServerActive=|'        /etc/zabbix/zabbix_agentd.conf
+sed -i -E 's|^[# ]*Hostname=.*|Hostname=linux-agent-proxy|' /etc/zabbix/zabbix_agentd.conf
 echo "Include=/etc/zabbix/zabbix_agentd.d/*.conf" >> /etc/zabbix/zabbix_agentd.conf
 
 mkdir -p /etc/zabbix/zabbix_agentd.d
@@ -418,7 +418,7 @@ chmod +x /opt/zabbix/task-linux.sh
    - Type: Agent
    - IP address: `<linux-agent-proxy private IP>`
    - Port: `10050`
-   - Connect to: IP *(passive check interface, even in active mode)*
+   - Connect to: IP
 4. **Templates** tab: click **Select**, search for `Linux by Zabbix agent`, add it
 5. Click **Add**
 
@@ -444,9 +444,9 @@ sudo bash 04-agent-linux-direct/install-agent-linux-direct.sh "10.0.1.x"   # ser
 Same steps as Phase 3 but replace the proxy IP with the **server private IP** and hostname with `linux-agent-direct`:
 ```bash
 SERVER_PRIVATE_IP="10.0.1.x"
-sed -i -E "s|^[# ]*Server=.*|Server=${SERVER_PRIVATE_IP}|"          /etc/zabbix/zabbix_agentd.conf
-sed -i -E "s|^[# ]*ServerActive=.*|ServerActive=${SERVER_PRIVATE_IP}|" /etc/zabbix/zabbix_agentd.conf
-sed -i -E "s|^[# ]*Hostname=.*|Hostname=linux-agent-direct|"            /etc/zabbix/zabbix_agentd.conf
+sed -i -E 's|^[# ]*Server=.*|Server=10.0.1.73|'              /etc/zabbix/zabbix_agentd.conf
+sed -i -E 's|^[# ]*ServerActive=.*|# ServerActive=|'          /etc/zabbix/zabbix_agentd.conf
+sed -i -E 's|^[# ]*Hostname=.*|Hostname=linux-agent-direct|'  /etc/zabbix/zabbix_agentd.conf
 ```
 
 Sender config also points to server:
@@ -511,11 +511,10 @@ $url = "https://cdn.zabbix.com/zabbix/binaries/stable/7.0/$version/windows/amd64
 $msi = "C:\Windows\Temp\zabbix_agent.msi"
 Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
 
-# 2. Silent install
+# 2. Silent install — passive mode (proxy polls agent on :10050)
 $proxyIp = "10.0.2.x"   # <-- replace with proxy private IP
 msiexec /i $msi /quiet /l*v "C:\Windows\Temp\zabbix_install.log" `
     "SERVER=$proxyIp" `
-    "SERVERACTIVE=$proxyIp" `
     "HOSTNAME=windows-agent-01"
 
 # 3. Verify service created

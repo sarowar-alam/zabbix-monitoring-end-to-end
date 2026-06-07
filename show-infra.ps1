@@ -390,10 +390,10 @@ function New-ZabbixInfra {
     } else {
         Step "Configuring Security Group ingress rules"
         Allow-CidrIngress $sgSrv 8080  "0.0.0.0/0"   # Zabbix web UI
-        Allow-SgIngress   $sgSrv 10051 $sgPrx          # active proxy → server
-        Allow-SgIngress   $sgSrv 10051 $sgLad          # linux-agent-direct → server
-        Allow-SgIngress   $sgPrx 10051 $sgLap          # linux-agent-proxy → proxy
-        Allow-SgIngress   $sgPrx 10051 $sgWin          # windows-agent → proxy
+        Allow-SgIngress   $sgSrv 10051 $sgPrx          # proxy → server (proxy check-in)
+        Allow-SgIngress   $sgLap 10050 $sgPrx          # proxy polls linux-agent-proxy (passive)
+        Allow-SgIngress   $sgLad 10050 $sgSrv          # server polls linux-agent-direct (passive)
+        Allow-SgIngress   $sgWin 10050 $sgPrx          # proxy polls windows-agent (passive)
         $s.sg_rules_applied = $true
         Save-State $s
         OK "SG rules applied"

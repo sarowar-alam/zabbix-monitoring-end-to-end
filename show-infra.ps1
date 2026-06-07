@@ -137,188 +137,257 @@ function Set-Tag {
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 function New-ZabbixInfra {
+    # Load existing state (resume mode) or start fresh
     if (Test-Path $STATE_FILE) {
-        Warn "infra-state.json already exists."
-        Warn "Run '.\show-infra.ps1 --teardown' first to start fresh."
-        return
+        Warn "infra-state.json found — resuming from existing state (skipping completed steps)."
+        $raw = Get-Content -Path $STATE_FILE -Raw | ConvertFrom-Json
+        $s = [ordered]@{}
+        foreach ($p in $raw.PSObject.Properties) { $s[$p.Name] = $p.Value }
+        if (-not $s.ContainsKey('instances') -or $null -eq $s.instances) {
+            $s.instances = [ordered]@{}
+        } else {
+            $instHash = [ordered]@{}
+            foreach ($ip in $s.instances.PSObject.Properties) {
+                $instHash[$ip.Name] = [ordered]@{}
+                foreach ($pp in $ip.Value.PSObject.Properties) { $instHash[$ip.Name][$pp.Name] = $pp.Value }
+            }
+            $s.instances = $instHash
+        }
+    } else {
+        $s = [ordered]@{}
     }
-
-    $s = [ordered]@{}
 
     # ── 1. VPC ────────────────────────────────────────────────────────────────
-    Step "Creating VPC (10.0.0.0/16)"
-    $vpc   = Invoke-Aws ec2 create-vpc --cidr-block 10.0.0.0/16
-    $vpcId = $vpc.Vpc.VpcId
-    $null  = Invoke-Aws ec2 modify-vpc-attribute --vpc-id $vpcId --enable-dns-hostnames
-    $null  = Invoke-Aws ec2 modify-vpc-attribute --vpc-id $vpcId --enable-dns-support
-    Set-Tag $vpcId "zbx-vpc"
-    $s.vpc_id = $vpcId
-    OK "VPC: $vpcId"
-
-    # ── 2. Subnets ────────────────────────────────────────────────────────────
-    Step "Creating subnets"
-    $pubSub   = Invoke-Aws ec2 create-subnet --vpc-id $vpcId --cidr-block 10.0.1.0/24 --availability-zone $AZ
-    $pubSubId = $pubSub.Subnet.SubnetId
-    $null     = Invoke-Aws ec2 modify-subnet-attribute --subnet-id $pubSubId --map-public-ip-on-launch
-    Set-Tag $pubSubId "zbx-public-subnet"
-    $s.public_subnet_id = $pubSubId
-    OK "Public  subnet: $pubSubId (10.0.1.0/24, $AZ)"
-
-    $pvtSub   = Invoke-Aws ec2 create-subnet --vpc-id $vpcId --cidr-block 10.0.2.0/24 --availability-zone $AZ
-    $pvtSubId = $pvtSub.Subnet.SubnetId
-    Set-Tag $pvtSubId "zbx-private-subnet"
-    $s.private_subnet_id = $pvtSubId
-    OK "Private subnet: $pvtSubId (10.0.2.0/24, $AZ)"
-
-    # ── 3. Internet Gateway ───────────────────────────────────────────────────
-    Step "Creating & attaching Internet Gateway"
-    $igw   = Invoke-Aws ec2 create-internet-gateway
-    $igwId = $igw.InternetGateway.InternetGatewayId
-    $null  = Invoke-Aws ec2 attach-internet-gateway --internet-gateway-id $igwId --vpc-id $vpcId
-    Set-Tag $igwId "zbx-igw"
-    $s.igw_id = $igwId
-    OK "IGW: $igwId"
-
-    # ── 4. Elastic IPs ────────────────────────────────────────────────────────
-    Step "Allocating Elastic IPs (NAT Gateway + Zabbix Server)"
-    $natEip = Invoke-Aws ec2 allocate-address --domain vpc
-    $s.nat_eip_alloc_id = $natEip.AllocationId
-    OK "NAT EIP allocation: $($natEip.AllocationId)"
-
-    $srvEip = Invoke-Aws ec2 allocate-address --domain vpc
-    $s.server_eip_alloc_id  = $srvEip.AllocationId
-    $s.server_eip_public_ip = $srvEip.PublicIp
-    OK "Server EIP: $($srvEip.PublicIp)  (alloc: $($srvEip.AllocationId))"
-
-    # ── 5. NAT Gateway ────────────────────────────────────────────────────────
-    Step "Creating NAT Gateway in public subnet (takes ~90 s)"
-    $natGw   = Invoke-Aws ec2 create-nat-gateway --subnet-id $pubSubId --allocation-id $s.nat_eip_alloc_id
-    $natGwId = $natGw.NatGateway.NatGatewayId
-    Set-Tag $natGwId "zbx-nat-gw"
-    $s.nat_gw_id = $natGwId
-    Info "NAT GW: $natGwId — waiting for 'available'..."
-    do {
-        Start-Sleep 15
-        $natState = Invoke-AwsText ec2 describe-nat-gateways `
-            --nat-gateway-ids $natGwId --query "NatGateways[0].State"
-        Info "  state: $natState"
-    } while ($natState -ne "available")
-    OK "NAT Gateway available"
-
-    # ── 6. Route Tables ───────────────────────────────────────────────────────
-    Step "Creating route tables"
-    $pubRt   = Invoke-Aws ec2 create-route-table --vpc-id $vpcId
-    $pubRtId = $pubRt.RouteTable.RouteTableId
-    $null    = Invoke-Aws ec2 create-route --route-table-id $pubRtId --destination-cidr-block 0.0.0.0/0 --gateway-id $igwId
-    $null    = Invoke-Aws ec2 associate-route-table --route-table-id $pubRtId --subnet-id $pubSubId
-    Set-Tag $pubRtId "zbx-public-rt"
-    $s.public_rt_id = $pubRtId
-    OK "Public  RT: $pubRtId  → IGW"
-
-    $pvtRt   = Invoke-Aws ec2 create-route-table --vpc-id $vpcId
-    $pvtRtId = $pvtRt.RouteTable.RouteTableId
-    $null    = Invoke-Aws ec2 create-route --route-table-id $pvtRtId --destination-cidr-block 0.0.0.0/0 --nat-gateway-id $natGwId
-    $null    = Invoke-Aws ec2 associate-route-table --route-table-id $pvtRtId --subnet-id $pvtSubId
-    Set-Tag $pvtRtId "zbx-private-rt"
-    $s.private_rt_id = $pvtRtId
-    OK "Private RT: $pvtRtId  → NAT GW"
-
-    # ── 7. IAM Role for SSM ───────────────────────────────────────────────────
-    Step "Creating IAM role '$ROLE_NAME' (AmazonSSMManagedInstanceCore)"
-    $trust = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
-    $tmpTrust     = [IO.Path]::GetTempFileName() + ".json"
-    $tmpTrustUri  = $tmpTrust.Replace('\', '/')
-    [IO.File]::WriteAllText($tmpTrust, $trust, [Text.Encoding]::ASCII)
-    try {
-        try {
-            $role = Invoke-IamAws @("iam","create-role","--role-name",$ROLE_NAME,
-                "--assume-role-policy-document","file://$tmpTrustUri")
-            $s.iam_role_arn = $role.Role.Arn
-        } catch {
-            if ($_ -match "EntityAlreadyExists") {
-                Warn "IAM role already exists — reusing"
-                $s.iam_role_arn = (Invoke-IamAws @("iam","get-role","--role-name",$ROLE_NAME)).Role.Arn
-            } else { throw }
-        }
-    } finally { Remove-Item $tmpTrust -Force -ErrorAction SilentlyContinue }
-
-    $null = Invoke-IamAws @("iam","attach-role-policy","--role-name",$ROLE_NAME,
-        "--policy-arn","arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")
-
-    try {
-        $prof = Invoke-IamAws @("iam","create-instance-profile","--instance-profile-name",$INST_PROF)
-        $s.instance_profile_arn = $prof.InstanceProfile.Arn
-    } catch {
-        if ($_ -match "EntityAlreadyExists") {
-            Warn "Instance profile already exists — reusing"
-            $s.instance_profile_arn = (Invoke-IamAws @("iam","get-instance-profile","--instance-profile-name",$INST_PROF)).InstanceProfile.Arn
-        } else { throw }
+    if ($s.vpc_id) {
+        Info "VPC already exists: $($s.vpc_id) (skipping)"
+        $vpcId = $s.vpc_id
+    } else {
+        Step "Creating VPC (10.0.0.0/16)"
+        $vpc   = Invoke-Aws ec2 create-vpc --cidr-block 10.0.0.0/16
+        $vpcId = $vpc.Vpc.VpcId
+        $null  = Invoke-Aws ec2 modify-vpc-attribute --vpc-id $vpcId --enable-dns-hostnames
+        $null  = Invoke-Aws ec2 modify-vpc-attribute --vpc-id $vpcId --enable-dns-support
+        Set-Tag $vpcId "zbx-vpc"
+        $s.vpc_id = $vpcId
+        Save-State $s
+        OK "VPC: $vpcId"
     }
 
-    try {
-        $null = Invoke-IamAws @("iam","add-role-to-instance-profile",
-            "--instance-profile-name",$INST_PROF,"--role-name",$ROLE_NAME)
-    } catch { if (-not ($_ -match "LimitExceeded")) { throw } }  # already attached is OK
+    # ── 2. Subnets ────────────────────────────────────────────────────────────
+    if ($s.public_subnet_id) {
+        Info "Subnets already exist (skipping)"
+        $pubSubId = $s.public_subnet_id
+        $pvtSubId = $s.private_subnet_id
+    } else {
+        Step "Creating subnets"
+        $pubSub   = Invoke-Aws ec2 create-subnet --vpc-id $vpcId --cidr-block 10.0.1.0/24 --availability-zone $AZ
+        $pubSubId = $pubSub.Subnet.SubnetId
+        $null     = Invoke-Aws ec2 modify-subnet-attribute --subnet-id $pubSubId --map-public-ip-on-launch
+        Set-Tag $pubSubId "zbx-public-subnet"
+        $s.public_subnet_id = $pubSubId
+        OK "Public  subnet: $pubSubId (10.0.1.0/24, $AZ)"
 
-    OK "IAM role=$ROLE_NAME  profile=$INST_PROF"
-    Info "Waiting 15 s for IAM propagation..."
-    Start-Sleep 15
+        $pvtSub   = Invoke-Aws ec2 create-subnet --vpc-id $vpcId --cidr-block 10.0.2.0/24 --availability-zone $AZ
+        $pvtSubId = $pvtSub.Subnet.SubnetId
+        Set-Tag $pvtSubId "zbx-private-subnet"
+        $s.private_subnet_id = $pvtSubId
+        Save-State $s
+        OK "Private subnet: $pvtSubId (10.0.2.0/24, $AZ)"
+    }
+
+    # ── 3. Internet Gateway ───────────────────────────────────────────────────
+    if ($s.igw_id) {
+        Info "IGW already exists: $($s.igw_id) (skipping)"
+        $igwId = $s.igw_id
+    } else {
+        Step "Creating & attaching Internet Gateway"
+        $igw   = Invoke-Aws ec2 create-internet-gateway
+        $igwId = $igw.InternetGateway.InternetGatewayId
+        $null  = Invoke-Aws ec2 attach-internet-gateway --internet-gateway-id $igwId --vpc-id $vpcId
+        Set-Tag $igwId "zbx-igw"
+        $s.igw_id = $igwId
+        Save-State $s
+        OK "IGW: $igwId"
+    }
+
+    # ── 4. Elastic IPs ────────────────────────────────────────────────────────
+    if ($s.nat_eip_alloc_id) {
+        Info "EIPs already allocated (skipping)"
+    } else {
+        Step "Allocating Elastic IPs (NAT Gateway + Zabbix Server)"
+        $natEip = Invoke-Aws ec2 allocate-address --domain vpc
+        $s.nat_eip_alloc_id = $natEip.AllocationId
+        OK "NAT EIP allocation: $($natEip.AllocationId)"
+
+        $srvEip = Invoke-Aws ec2 allocate-address --domain vpc
+        $s.server_eip_alloc_id  = $srvEip.AllocationId
+        $s.server_eip_public_ip = $srvEip.PublicIp
+        Save-State $s
+        OK "Server EIP: $($srvEip.PublicIp)  (alloc: $($srvEip.AllocationId))"
+    }
+
+    # ── 5. NAT Gateway ────────────────────────────────────────────────────────
+    if ($s.nat_gw_id) {
+        Info "NAT Gateway already exists: $($s.nat_gw_id) (skipping)"
+        $natGwId = $s.nat_gw_id
+    } else {
+        Step "Creating NAT Gateway in public subnet (takes ~90 s)"
+        $natGw   = Invoke-Aws ec2 create-nat-gateway --subnet-id $pubSubId --allocation-id $s.nat_eip_alloc_id
+        $natGwId = $natGw.NatGateway.NatGatewayId
+        Set-Tag $natGwId "zbx-nat-gw"
+        $s.nat_gw_id = $natGwId
+        Save-State $s
+        Info "NAT GW: $natGwId — waiting for 'available'..."
+        do {
+            Start-Sleep 15
+            $natState = Invoke-AwsText ec2 describe-nat-gateways `
+                --nat-gateway-ids $natGwId --query "NatGateways[0].State"
+            Info "  state: $natState"
+        } while ($natState -ne "available")
+        OK "NAT Gateway available"
+    }
+
+    # ── 6. Route Tables ───────────────────────────────────────────────────────
+    if ($s.public_rt_id) {
+        Info "Route tables already exist (skipping)"
+        $pubRtId = $s.public_rt_id
+        $pvtRtId = $s.private_rt_id
+    } else {
+        Step "Creating route tables"
+        $pubRt   = Invoke-Aws ec2 create-route-table --vpc-id $vpcId
+        $pubRtId = $pubRt.RouteTable.RouteTableId
+        $null    = Invoke-Aws ec2 create-route --route-table-id $pubRtId --destination-cidr-block 0.0.0.0/0 --gateway-id $igwId
+        $null    = Invoke-Aws ec2 associate-route-table --route-table-id $pubRtId --subnet-id $pubSubId
+        Set-Tag $pubRtId "zbx-public-rt"
+        $s.public_rt_id = $pubRtId
+        OK "Public  RT: $pubRtId  → IGW"
+
+        $pvtRt   = Invoke-Aws ec2 create-route-table --vpc-id $vpcId
+        $pvtRtId = $pvtRt.RouteTable.RouteTableId
+        $null    = Invoke-Aws ec2 create-route --route-table-id $pvtRtId --destination-cidr-block 0.0.0.0/0 --nat-gateway-id $natGwId
+        $null    = Invoke-Aws ec2 associate-route-table --route-table-id $pvtRtId --subnet-id $pvtSubId
+        Set-Tag $pvtRtId "zbx-private-rt"
+        $s.private_rt_id = $pvtRtId
+        Save-State $s
+        OK "Private RT: $pvtRtId  → NAT GW"
+    }
+
+    # ── 7. IAM Role for SSM ───────────────────────────────────────────────────
+    if ($s.iam_role_arn -and $s.iam_role_arn -ne "") {
+        Info "IAM role already exists: $ROLE_NAME (skipping)"
+    } else {
+        Step "Creating IAM role '$ROLE_NAME' (AmazonSSMManagedInstanceCore)"
+        $trust = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+        $tmpTrust    = [IO.Path]::GetTempFileName() + ".json"
+        $tmpTrustUri = $tmpTrust.Replace('\', '/')
+        [IO.File]::WriteAllText($tmpTrust, $trust, [Text.Encoding]::ASCII)
+        try {
+            try {
+                $role = Invoke-IamAws @("iam","create-role","--role-name",$ROLE_NAME,
+                    "--assume-role-policy-document","file://$tmpTrustUri")
+                $s.iam_role_arn = $role.Role.Arn
+            } catch {
+                if ($_ -match "EntityAlreadyExists") {
+                    Warn "IAM role already exists — reusing"
+                    $s.iam_role_arn = (Invoke-IamAws @("iam","get-role","--role-name",$ROLE_NAME)).Role.Arn
+                } else { throw }
+            }
+        } finally { Remove-Item $tmpTrust -Force -ErrorAction SilentlyContinue }
+
+        $null = Invoke-IamAws @("iam","attach-role-policy","--role-name",$ROLE_NAME,
+            "--policy-arn","arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")
+
+        try {
+            $prof = Invoke-IamAws @("iam","create-instance-profile","--instance-profile-name",$INST_PROF)
+            $s.instance_profile_arn = $prof.InstanceProfile.Arn
+        } catch {
+            if ($_ -match "EntityAlreadyExists") {
+                Warn "Instance profile already exists — reusing"
+                $s.instance_profile_arn = (Invoke-IamAws @("iam","get-instance-profile","--instance-profile-name",$INST_PROF)).InstanceProfile.Arn
+            } else { throw }
+        }
+
+        try {
+            $null = Invoke-IamAws @("iam","add-role-to-instance-profile",
+                "--instance-profile-name",$INST_PROF,"--role-name",$ROLE_NAME)
+        } catch { if (-not ($_ -match "LimitExceeded")) { throw } }
+
+        Save-State $s
+        OK "IAM role=$ROLE_NAME  profile=$INST_PROF"
+        Info "Waiting 15 s for IAM propagation..."
+        Start-Sleep 15
+    }
 
     # ── 8. Security Groups ────────────────────────────────────────────────────
-    Step "Creating 5 Security Groups"
-    $sgSrv = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-server" `
-        --description "Zabbix Server SG" --vpc-id $vpcId).GroupId
-    $sgPrx = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-proxy" `
-        --description "Zabbix Proxy SG" --vpc-id $vpcId).GroupId
-    $sgLap = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-linux-agent-proxy" `
-        --description "Linux Agent via Proxy SG" --vpc-id $vpcId).GroupId
-    $sgLad = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-linux-agent-direct" `
-        --description "Linux Agent Direct SG" --vpc-id $vpcId).GroupId
-    $sgWin = (Invoke-Aws ec2 create-security-group --group-name "sg-zbx-windows-agent" `
-        --description "Windows Agent SG" --vpc-id $vpcId).GroupId
+    if ($s.sg_server -and $s.sg_server -ne "") {
+        Info "Security Groups already exist (skipping)"
+        $sgSrv = $s.sg_server
+        $sgPrx = $s.sg_proxy
+        $sgLap = $s.sg_linux_agent_proxy
+        $sgLad = $s.sg_linux_agent_direct
+        $sgWin = $s.sg_windows_agent
+    } else {
+        Step "Creating 5 Security Groups"
+        $sgSrv = (Invoke-Aws ec2 create-security-group --group-name "zbx-server" `
+            --description "Zabbix Server SG" --vpc-id $vpcId).GroupId
+        $sgPrx = (Invoke-Aws ec2 create-security-group --group-name "zbx-proxy" `
+            --description "Zabbix Proxy SG" --vpc-id $vpcId).GroupId
+        $sgLap = (Invoke-Aws ec2 create-security-group --group-name "zbx-linux-agent-proxy" `
+            --description "Linux Agent via Proxy SG" --vpc-id $vpcId).GroupId
+        $sgLad = (Invoke-Aws ec2 create-security-group --group-name "zbx-linux-agent-direct" `
+            --description "Linux Agent Direct SG" --vpc-id $vpcId).GroupId
+        $sgWin = (Invoke-Aws ec2 create-security-group --group-name "zbx-windows-agent" `
+            --description "Windows Agent SG" --vpc-id $vpcId).GroupId
 
-    Set-Tag $sgSrv "zbx-sg-server"
-    Set-Tag $sgPrx "zbx-sg-proxy"
-    Set-Tag $sgLap "zbx-sg-linux-proxy"
-    Set-Tag $sgLad "zbx-sg-linux-direct"
-    Set-Tag $sgWin "zbx-sg-windows"
+        Set-Tag $sgSrv "zbx-sg-server"
+        Set-Tag $sgPrx "zbx-sg-proxy"
+        Set-Tag $sgLap "zbx-sg-linux-proxy"
+        Set-Tag $sgLad "zbx-sg-linux-direct"
+        Set-Tag $sgWin "zbx-sg-windows"
 
-    $s.sg_server             = $sgSrv
-    $s.sg_proxy              = $sgPrx
-    $s.sg_linux_agent_proxy  = $sgLap
-    $s.sg_linux_agent_direct = $sgLad
-    $s.sg_windows_agent      = $sgWin
-    OK "5 SGs created"
+        $s.sg_server             = $sgSrv
+        $s.sg_proxy              = $sgPrx
+        $s.sg_linux_agent_proxy  = $sgLap
+        $s.sg_linux_agent_direct = $sgLad
+        $s.sg_windows_agent      = $sgWin
+        Save-State $s
+        OK "5 SGs created"
 
-    # ── 9. SG Ingress Rules ────────────────────────────────────────────────────
-    Step "Configuring Security Group ingress rules"
-    # Server: web UI open to world, active trapper from proxy and direct-agent
-    Allow-CidrIngress $sgSrv 8080 "0.0.0.0/0"      # Zabbix web UI
-    Allow-SgIngress   $sgSrv 10051 $sgPrx            # active proxy → server
-    Allow-SgIngress   $sgSrv 10051 $sgLad            # linux-agent-direct → server
-    # Proxy: trapper from agents that point to proxy
-    Allow-SgIngress   $sgPrx 10051 $sgLap            # linux-agent-proxy → proxy
-    Allow-SgIngress   $sgPrx 10051 $sgWin            # windows-agent → proxy
-    # Agent SGs: no inbound Zabbix rules (agents run in active mode — they dial out)
-    OK "SG rules applied"
+        # ── 9. SG Ingress Rules (only set when SGs are freshly created) ───────
+        Step "Configuring Security Group ingress rules"
+        Allow-CidrIngress $sgSrv 8080  "0.0.0.0/0"   # Zabbix web UI
+        Allow-SgIngress   $sgSrv 10051 $sgPrx          # active proxy → server
+        Allow-SgIngress   $sgSrv 10051 $sgLad          # linux-agent-direct → server
+        Allow-SgIngress   $sgPrx 10051 $sgLap          # linux-agent-proxy → proxy
+        Allow-SgIngress   $sgPrx 10051 $sgWin          # windows-agent → proxy
+        OK "SG rules applied"
+    }
 
     # ── 10. Fetch AMI IDs ─────────────────────────────────────────────────────
-    Step "Fetching latest AMI IDs from SSM Parameter Store"
-    $uAmi = Invoke-AwsText ssm get-parameter `
-        --name "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp2/ami-id" `
-        --query "Parameter.Value"
-    OK "Ubuntu 24.04 AMI: $uAmi"
+    if ($s.ubuntu_ami -and $s.ubuntu_ami -ne "") {
+        Info "AMIs already fetched (skipping)"
+        $uAmi = $s.ubuntu_ami
+        $wAmi = $s.windows_ami
+    } else {
+        Step "Fetching latest AMI IDs from SSM Parameter Store"
+        $uAmi = Invoke-AwsText ssm get-parameter `
+            --name "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp2/ami-id" `
+            --query "Parameter.Value"
+        OK "Ubuntu 24.04 AMI: $uAmi"
 
-    $wAmi = Invoke-AwsText ssm get-parameter `
-        --name "/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base" `
-        --query "Parameter.Value"
-    OK "Windows Server 2022 AMI: $wAmi"
+        $wAmi = Invoke-AwsText ssm get-parameter `
+            --name "/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base" `
+            --query "Parameter.Value"
+        OK "Windows Server 2022 AMI: $wAmi"
 
-    $s.ubuntu_ami  = $uAmi
-    $s.windows_ami = $wAmi
+        $s.ubuntu_ami  = $uAmi
+        $s.windows_ami = $wAmi
+        Save-State $s
+    }
 
-    # ── 11. User Data Scripts ─────────────────────────────────────────────────
-    # Linux: ensure SSM snap agent is installed and running
+    # ── 11. Launch EC2 Instances (skip any already launched) ─────────────────
+    if (-not $s.ContainsKey('instances') -or $null -eq $s.instances) { $s.instances = [ordered]@{} }
+
     $linuxUD = @'
 #!/bin/bash
 set -e
@@ -329,7 +398,6 @@ systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
 systemctl start  snap.amazon-ssm-agent.amazon-ssm-agent.service || true
 '@
 
-    # Windows: ensure SSM Agent MSI is installed and service is running
     $winUD = @'
 <powershell>
 $ssm = Get-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
@@ -343,18 +411,14 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
 </powershell>
 '@
 
-    $tmpL = [IO.Path]::GetTempFileName() + ".sh"
-    $tmpW = [IO.Path]::GetTempFileName() + ".txt"
-    [IO.File]::WriteAllText($tmpL, $linuxUD.TrimStart(), [Text.Encoding]::UTF8)
-    [IO.File]::WriteAllText($tmpW, $winUD.TrimStart(),   [Text.Encoding]::UTF8)
+    $tmpL    = [IO.Path]::GetTempFileName() + ".sh"
+    $tmpW    = [IO.Path]::GetTempFileName() + ".txt"
     $tmpLUri = $tmpL.Replace('\', '/')
     $tmpWUri = $tmpW.Replace('\', '/')
+    [IO.File]::WriteAllText($tmpL, $linuxUD.TrimStart(), [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($tmpW, $winUD.TrimStart(),   [Text.Encoding]::UTF8)
 
     try {
-        # ── 12. Launch EC2 Instances ──────────────────────────────────────────
-        Step "Launching 5 EC2 instances"
-        $s.instances = [ordered]@{}
-
         $launches = @(
             [ordered]@{ name="zabbix-server";      type="t3.medium"; subnet=$pubSubId; sg=$sgSrv; ami=$uAmi; ud=$tmpLUri; vol=20 }
             [ordered]@{ name="zabbix-proxy";       type="t3.small";  subnet=$pvtSubId; sg=$sgPrx; ami=$uAmi; ud=$tmpLUri; vol=15 }
@@ -363,12 +427,15 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
             [ordered]@{ name="windows-agent-01";   type="t3.medium"; subnet=$pvtSubId; sg=$sgWin; ami=$wAmi; ud=$tmpWUri; vol=50 }
         )
 
+        $needWait = @()
+        Step "Launching EC2 instances"
         foreach ($l in $launches) {
-            Info "Launching $($l.name) ($($l.type))..."
-            $bdt = "DeviceName=/dev/sda1,Ebs={VolumeSize=$($l.vol),VolumeType=gp3,DeleteOnTermination=true}"
-            if ($l.ami -eq $wAmi) {
-                $bdt = "DeviceName=/dev/sda1,Ebs={VolumeSize=$($l.vol),VolumeType=gp3,DeleteOnTermination=true}"
+            if ($s.instances.ContainsKey($l.name) -and $s.instances[$l.name].instance_id) {
+                Info "$($l.name) already launched: $($s.instances[$l.name].instance_id) (skipping)"
+                continue
             }
+            Info "Launching $($l.name) ($($l.type))..."
+            $bdt  = "DeviceName=/dev/sda1,Ebs={VolumeSize=$($l.vol),VolumeType=gp3,DeleteOnTermination=true}"
             $inst = Invoke-Aws ec2 run-instances `
                 --image-id $l.ami `
                 --instance-type $l.type `
@@ -380,32 +447,41 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
                 --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$($l.name)},{Key=Project,Value=zabbix-monitoring}]" `
                 --query "Instances[0]"
             $s.instances[$l.name] = [ordered]@{ instance_id = $inst.InstanceId }
+            $needWait += $inst.InstanceId
+            Save-State $s
             OK "$($l.name): $($inst.InstanceId)"
         }
 
-        # ── 13. Wait for 'running' ────────────────────────────────────────────
-        Step "Waiting for all 5 instances to reach 'running' state (~2-3 min)..."
-        $allIds = @($s.instances.Values | ForEach-Object { $_.instance_id })
-        Invoke-AwsWait (@("ec2","wait","instance-running","--instance-ids") + $allIds)
-        OK "All 5 instances are running"
+        # ── 12. Wait for newly launched instances ─────────────────────────────
+        if ($needWait.Count -gt 0) {
+            Step "Waiting for $($needWait.Count) instance(s) to reach 'running' state..."
+            Invoke-AwsWait (@("ec2","wait","instance-running","--instance-ids") + $needWait)
+            OK "Instances running"
+        }
 
-        # ── 14. Collect Private IPs + Associate Server EIP ────────────────────
-        Step "Collecting private IPs and associating Server EIP"
+        # ── 13. Collect Private IPs ───────────────────────────────────────────
+        Step "Collecting private IPs"
         foreach ($name in $s.instances.Keys) {
+            if ($s.instances[$name].private_ip) { Info "$name  →  $($s.instances[$name].private_ip) (cached)"; continue }
             $id  = $s.instances[$name].instance_id
             $pip = Invoke-AwsText ec2 describe-instances --instance-ids $id `
                        --query "Reservations[0].Instances[0].PrivateIpAddress"
             $s.instances[$name].private_ip = $pip
             Info "$name  →  $pip"
         }
-
-        $null = Invoke-Aws ec2 associate-address `
-            --instance-id $s.instances["zabbix-server"].instance_id `
-            --allocation-id $s.server_eip_alloc_id
-        $s.instances["zabbix-server"].public_ip = $s.server_eip_public_ip
-        OK "EIP $($s.server_eip_public_ip) associated with zabbix-server"
-
         Save-State $s
+
+        # ── 14. Associate Server EIP ─────────────────────────────────────────
+        if (-not $s.instances["zabbix-server"].public_ip) {
+            $null = Invoke-Aws ec2 associate-address `
+                --instance-id $s.instances["zabbix-server"].instance_id `
+                --allocation-id $s.server_eip_alloc_id
+            $s.instances["zabbix-server"].public_ip = $s.server_eip_public_ip
+            Save-State $s
+            OK "EIP $($s.server_eip_public_ip) associated with zabbix-server"
+        } else {
+            Info "Server EIP already associated: $($s.instances['zabbix-server'].public_ip) (skipping)"
+        }
 
     } finally {
         Remove-Item $tmpL -Force -ErrorAction SilentlyContinue

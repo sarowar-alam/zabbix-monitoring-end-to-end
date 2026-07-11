@@ -197,7 +197,32 @@ EOF
 rm -f /etc/nginx/sites-enabled/default
 ```
 
-### Step 9 — Enable and Start Services
+### Step 9 — Write `/etc/zabbix/zabbix_agentd.conf`
+
+The server monitors itself via its local agent (server polls agent on localhost).
+
+```bash
+cat > /etc/zabbix/zabbix_agentd.conf <<'EOF'
+# Zabbix Agent — zabbix-server (self-monitoring)
+# Server polls its own agent on 127.0.0.1:10050
+
+PidFile=/run/zabbix/zabbix_agentd.pid
+LogFile=/var/log/zabbix/zabbix_agentd.log
+LogFileSize=0
+
+# Only localhost is allowed to poll (passive mode — server polls itself)
+Server=127.0.0.1
+# ServerActive disabled — passive mode only
+
+Hostname=zabbix-server
+
+Include=/etc/zabbix/zabbix_agentd.d/*.conf
+EOF
+
+mkdir -p /etc/zabbix/zabbix_agentd.d
+```
+
+### Step 10 — Enable and Start Services
 
 ```bash
 systemctl enable  zabbix-server zabbix-agent nginx php8.3-fpm
@@ -234,6 +259,27 @@ Open `http://<EIP>:8080` in your browser and complete the 7-step wizard:
 | Timezone | `Asia/Kolkata` |
 
 **Login:** `Admin` / `zabbix` — **change the password immediately.**
+
+---
+
+## Add Server as a Monitored Host
+
+After completing the wizard, add the server itself as a host so Zabbix monitors its own CPU, memory, and disk.
+
+**Configuration → Hosts → Create host**
+
+| Tab | Field | Value |
+|-----|-------|-------|
+| Host | Host name | `zabbix-server` |
+| Host | Monitored by proxy | *(leave empty — self-monitored via localhost)* |
+| Host | Groups | `Linux servers` |
+| Interfaces | Type | Agent |
+| Interfaces | IP address | `127.0.0.1` |
+| Interfaces | Port | `10050` |
+| Interfaces | Connect to | IP |
+| Templates | | `Linux by Zabbix agent` |
+
+Click **Add**. The host will go green immediately since the agent is local.
 
 ---
 

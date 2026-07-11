@@ -392,6 +392,7 @@ function New-ZabbixInfra {
         Step "Configuring Security Group ingress rules"
         Allow-CidrIngress $sgSrv 8080  "0.0.0.0/0"   # Zabbix web UI
         Allow-SgIngress   $sgSrv 10051 $sgPrx          # proxy → server (proxy check-in)
+        Allow-SgIngress   $sgPrx 10050 $sgSrv          # server polls zabbix-proxy agent (passive)
         Allow-SgIngress   $sgLap 10050 $sgPrx          # proxy polls linux-agent-proxy (passive)
         Allow-SgIngress   $sgLad 10050 $sgSrv          # server polls linux-agent-direct (passive)
         Allow-SgIngress   $sgWin 10050 $sgPrx          # proxy polls windows-agent (passive)

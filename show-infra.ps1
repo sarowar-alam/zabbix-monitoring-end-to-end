@@ -18,7 +18,7 @@
       windows-agent-01   (t3.medium, Windows Server 2022, private subnet)
 
     SSM Agent is confirmed on ALL instances via EC2 user data (including Windows).
-    No key pairs or bastion host required.
+    Key pair: sarowar-ostad-mumbai (ap-south-1) — for emergency SSH/RDP if SSM unavailable.
 
 .EXAMPLE
     .\show-infra.ps1               # same as --create
@@ -50,6 +50,7 @@ $AZ           = "ap-south-1a"
 $STATE_FILE   = Join-Path $PSScriptRoot "infra-state.json"
 $ROLE_NAME    = "ZabbixSSMRole"
 $INST_PROF    = "ZabbixSSMProfile"
+$KEY_NAME     = "sarowar-ostad-mumbai"
 
 # ─── AWS CLI Wrappers ────────────────────────────────────────────────────────
 # These functions use $args (automatic variable) so they accept any positional args.
@@ -491,6 +492,7 @@ Start-Service -Name 'AmazonSSMAgent' -ErrorAction SilentlyContinue
                 --subnet-id $l.subnet `
                 --security-group-ids $l.sg `
                 --iam-instance-profile "Name=$INST_PROF" `
+                --key-name $KEY_NAME `
                 --user-data "file://$($l.ud)" `
                 --block-device-mappings $bdt `
                 --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$($l.name)},{Key=Project,Value=zabbix-monitoring}]" `
